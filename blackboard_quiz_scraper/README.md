@@ -21,7 +21,7 @@ python scrape_quiz.py --title "Fluid Mechanics 2 - Self-test 1"
 2. Switch back to the terminal and press **Enter**.
 3. Leave it running. It stops on its own after 15 attempts in a row with no new questions. You can also press Ctrl+C at any time.
 
-Output goes in `quiz_output/`:
+Output goes in the `quiz_output` folder next to `scrape_quiz.py` (e.g. `C:\Users\you\StockAnalysis\blackboard_quiz_scraper\quiz_output\`), whichever folder you run it from. The full path is printed when the script starts:
 
 - `questions.docx`: every unique question, as text plus a screenshot of the question (keeps diagrams, subscripts and equations).
 - `questions.json` and `screenshots/`: saved progress. If you re-run, the script continues and never adds a question twice.
@@ -37,9 +37,9 @@ Useful options:
 | `--browser msedge` | Use your installed Microsoft Edge instead of Playwright's Chromium |
 | `--keep-number-variants` | Save a question again when only its numbers differ |
 | `--no-screenshots` | Text only |
-| `--out DIR` | Output folder (default `quiz_output`) |
+| `--out DIR` | Output folder (default `quiz_output` next to the script) |
 
-Your login is kept in `.bb_browser_profile/`, so you normally only log in once.
+Your login is kept in `.bb_browser_profile/` next to the script, so you normally only log in once.
 
 The quiz page address is saved in `quiz_output/quiz_url.txt`. On later runs the script opens it by itself, so you don't have to navigate there again. If it ever can't get back to the quiz, it pauses and asks you to open the page and press Enter.
 

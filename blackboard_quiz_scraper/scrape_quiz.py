@@ -19,7 +19,7 @@ Progress is saved to the output folder after every attempt, so you can stop
 (Ctrl+C) and re-run later; already-seen questions are never added twice.
 """
 
-VERSION = "4"
+VERSION = "5"
 
 import argparse
 import hashlib
@@ -400,11 +400,15 @@ def back_to_quiz(ctx, page, details_url):
     return None
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
 def main():
     ap = argparse.ArgumentParser(description="Harvest Blackboard quiz questions into a Word document.")
     ap.add_argument("--url", help="URL of the quiz's 'Assessment Details' page (the one with 'Start attempt'). "
                                   "If omitted you navigate there yourself and press Enter.")
-    ap.add_argument("--out", default="quiz_output", help="Output folder (default: quiz_output)")
+    ap.add_argument("--out", default=str(SCRIPT_DIR / "quiz_output"),
+                    help="Output folder (default: quiz_output next to this script)")
     ap.add_argument("--title", default="Quiz Question Bank", help="Title at the top of the Word document")
     ap.add_argument("--max-attempts", type=int, default=100, help="Stop after this many attempts (default 100)")
     ap.add_argument("--stop-after", type=int, default=15,
@@ -416,13 +420,15 @@ def main():
     ap.add_argument("--browser", default=None, choices=["msedge", "chrome"],
                     help="Use an installed Edge/Chrome instead of Playwright's Chromium")
     ap.add_argument("--executable", default=None, help="Path to a Chromium/Chrome/Edge executable to use")
-    ap.add_argument("--profile", default=".bb_browser_profile",
+    ap.add_argument("--profile", default=str(SCRIPT_DIR / ".bb_browser_profile"),
                     help="Browser profile folder, so your login is remembered between runs")
     args = ap.parse_args()
 
     print(f"scrape_quiz.py version {VERSION}")
     store = Store(args.out, args.title, ignore_numbers=not args.keep_number_variants)
-    print(f"Loaded {len(store.questions)} previously saved questions from {store.dir}")
+    store.save()  # create the Word file straight away
+    print(f"Loaded {len(store.questions)} previously saved questions")
+    print(f"Word document: {store.docx_path.resolve()}")
 
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(

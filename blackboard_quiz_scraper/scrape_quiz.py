@@ -229,13 +229,26 @@ def find_visible(page, make_locators, timeout=15.0):
     return None
 
 
+def retry(action, what, tries=5):
+    """Run action(try_no), retrying when Blackboard re-renders the element mid-action."""
+    last = None
+    for n in range(tries):
+        try:
+            return action(n)
+        except PlaywrightError as e:
+            last = e
+            time.sleep(1.0)
+    raise RuntimeError(f"{what} failed after {tries} tries: {str(last).splitlines()[0]}")
+
+
 def click(page, make_locators, what, timeout=15.0):
-    loc = find_visible(page, make_locators, timeout)
-    if loc is None:
-        raise RuntimeError(f"Could not find {what}")
-    loc.scroll_into_view_if_needed()
-    loc.click()
-    return loc
+    def do(n):
+        loc = find_visible(page, make_locators, timeout)
+        if loc is None:
+            raise RuntimeError(f"Could not find {what}")
+        # Playwright scrolls into view itself; on the last tries skip its stability checks
+        loc.click(timeout=5000, force=n >= 3)
+    retry(do, f"Clicking {what}")
 
 
 def attempt_frame(page, timeout=30.0):
@@ -266,24 +279,28 @@ def load_all_questions(frame):
         last = count
 
 
+START_RE = re.compile(r"(start|continue|resume) attempt", re.I)
+
+
 def run_attempt(page, details_url, store, attempt_no, args):
     # 1. Make sure we are on the details page and press "Start attempt N".
-    start = find_visible(page, lambda f: [f.get_by_role("button", name=re.compile(r"start attempt", re.I))], 5)
+    start = find_visible(page, lambda f: [f.get_by_role("button", name=START_RE)], 5)
     if start is None:
         page.goto(details_url, wait_until="domcontentloaded")
         start = find_visible(page, lambda f: [
-            f.get_by_role("button", name=re.compile(r"start attempt", re.I)),
-            f.get_by_role("link", name=re.compile(r"start attempt", re.I)),
+            f.get_by_role("button", name=START_RE),
+            f.get_by_role("link", name=START_RE),
         ], 30)
         if start is None:
             raise RuntimeError("Could not find the 'Start attempt' button")
-    start.click()
+    click(page, lambda f: [f.get_by_role(role, name=START_RE) for role in ("button", "link")],
+          "the Start attempt button")
 
     # Some quizzes show an extra "Start attempt"/"Begin" confirmation dialog.
-    confirm = find_visible(page, lambda f: [f.locator("[role=dialog]").get_by_role(
-        "button", name=re.compile(r"^(start attempt|start|begin|continue)$", re.I))], 3)
-    if confirm is not None:
-        confirm.click()
+    confirm_btn = lambda f: [f.locator("[role=dialog]").get_by_role(
+        "button", name=re.compile(r"^(start attempt|start|begin|continue)$", re.I))]
+    if find_visible(page, confirm_btn, 3) is not None:
+        click(page, confirm_btn, "the Start confirmation button", timeout=3)
 
     # 2. Wait for the attempt to load and scroll to the bottom.
     frame = attempt_frame(page)
@@ -305,28 +322,33 @@ def run_attempt(page, details_url, store, attempt_no, args):
         shot = None
         if not args.no_screenshots:
             shot = f"screenshots/q{len(store.questions) + 1:04d}.png"
+            el = frame.locator(f"[data-qs-block='{b['index']}']")
             try:
-                el = frame.locator(f"[data-qs-block='{b['index']}']")
-                el.scroll_into_view_if_needed()
-                el.screenshot(path=str(store.dir / shot))
-            except PlaywrightError as e:
-                print(f"  ! screenshot failed: {e}")
+                retry(lambda n: el.screenshot(path=str(store.dir / shot), timeout=10000,
+                                              animations="disabled"), "Screenshot", tries=3)
+            except RuntimeError as e:
+                print(f"  ! {e} - saving the question as text only")
                 shot = None
         store.add(key, text, b["images"], shot, attempt_no)
         new += 1
 
     # 4. Type '0' into the last text box.
     frame.evaluate(SCROLL_BOTTOM_JS)
-    boxes = frame.locator("input[type=text], input[type=number], input:not([type]), textarea, "
-                          "[contenteditable=true]")
-    visible_boxes = [boxes.nth(i) for i in range(boxes.count()) if boxes.nth(i).is_visible()]
-    if visible_boxes:
-        box = visible_boxes[-1]
-        box.scroll_into_view_if_needed()
-        box.click()
-        box.fill("0")
+    time.sleep(1.0)  # let the scroll finish so elements stop moving
+
+    def type_zero(n):
+        # re-find the box on every try: Blackboard replaces elements while it re-renders
+        boxes = frame.locator("input[type=text], input[type=number], input:not([type]), textarea, "
+                              "[contenteditable=true]")
+        visible = [i for i in range(boxes.count()) if boxes.nth(i).is_visible()]
+        if not visible:
+            return
+        box = boxes.nth(visible[-1])
+        box.fill("0", timeout=5000, force=n >= 3)
         box.press("Tab")  # blur so Blackboard autosaves the answer
-        time.sleep(1.0)
+
+    retry(type_zero, "Typing 0 into the last text box")
+    time.sleep(1.0)
 
     # 5. Submit -> confirm Submit -> Close.
     click(page, lambda f: [f.get_by_role("button", name=re.compile(r"^\s*submit\s*$", re.I))],

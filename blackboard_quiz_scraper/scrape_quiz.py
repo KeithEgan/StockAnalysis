@@ -19,6 +19,8 @@ Progress is saved to the output folder after every attempt, so you can stop
 (Ctrl+C) and re-run later; already-seen questions are never added twice.
 """
 
+VERSION = "4"
+
 import argparse
 import hashlib
 import json
@@ -284,13 +286,10 @@ START_RE = re.compile(r"(start|continue|resume) attempt", re.I)
 
 def run_attempt(page, details_url, store, attempt_no, args):
     # 1. Make sure we are on the details page and press "Start attempt N".
-    start = find_visible(page, lambda f: [f.get_by_role("button", name=START_RE)], 5)
+    start = find_visible(page, start_button, 5)
     if start is None:
         page.goto(details_url, wait_until="domcontentloaded")
-        start = find_visible(page, lambda f: [
-            f.get_by_role("button", name=START_RE),
-            f.get_by_role("link", name=START_RE),
-        ], 30)
+        start = find_visible(page, start_button, 30)
         if start is None:
             raise RuntimeError("Could not find the 'Start attempt' button")
     click(page, lambda f: [f.get_by_role(role, name=START_RE) for role in ("button", "link")],
@@ -361,6 +360,46 @@ def run_attempt(page, details_url, store, attempt_no, args):
     return len(blocks), new
 
 
+def current_page(ctx, page):
+    """The tab to drive: the given one if still open, else the newest open tab."""
+    if page is not None and not page.is_closed():
+        return page
+    open_pages = [p for p in ctx.pages if not p.is_closed()]
+    return open_pages[-1] if open_pages else ctx.new_page()
+
+
+def start_button(f):
+    return [f.get_by_role(r, name=START_RE) for r in ("button", "link")]
+
+
+def wait_for_user_on_quiz_page(ctx):
+    """Ask the user to open the quiz page, then find whichever tab it is in."""
+    while True:
+        print("\nLog in if needed and open the quiz's details page (the one with 'Start attempt').")
+        input("Press Enter here when that page is showing... ")
+        for p in reversed(ctx.pages):
+            if not p.is_closed() and find_visible(p, start_button, 2) is not None:
+                p.bring_to_front()
+                return p, p.url
+        print("Couldn't see a 'Start attempt' button in any tab - please try again.")
+
+
+def back_to_quiz(ctx, page, details_url):
+    """Get back to the quiz details page. Returns the page, or None if that failed."""
+    for p in reversed(ctx.pages):  # maybe it's already showing in some tab
+        if not p.is_closed() and find_visible(p, start_button, 1) is not None:
+            return p
+    page = current_page(ctx, page)
+    try:
+        page.goto(details_url, wait_until="domcontentloaded")
+        if find_visible(page, start_button, 30) is not None:
+            return page
+    except PlaywrightError:
+        pass
+    print("  Could not get back to the quiz page automatically.")
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Harvest Blackboard quiz questions into a Word document.")
     ap.add_argument("--url", help="URL of the quiz's 'Assessment Details' page (the one with 'Start attempt'). "
@@ -381,6 +420,7 @@ def main():
                     help="Browser profile folder, so your login is remembered between runs")
     args = ap.parse_args()
 
+    print(f"scrape_quiz.py version {VERSION}")
     store = Store(args.out, args.title, ignore_numbers=not args.keep_number_variants)
     print(f"Loaded {len(store.questions)} previously saved questions from {store.dir}")
 
@@ -391,24 +431,41 @@ def main():
             viewport={"width": 1400, "height": 900},
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        if args.url:
-            page.goto(args.url, wait_until="domcontentloaded")
-        print("\nLog in if needed and open the quiz's details page (the one with 'Start attempt').")
-        input("Press Enter here when that page is showing... ")
-        details_url = page.url
+        url_file = store.dir / "quiz_url.txt"
+        url = args.url or (url_file.read_text(encoding="utf-8").strip() if url_file.exists() else "")
+        details_url = None
+        if url:
+            print(f"Opening {url}")
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                if find_visible(page, lambda f: [f.get_by_role(r, name=START_RE) for r in ("button", "link")],
+                                30) is not None:
+                    details_url = page.url
+            except PlaywrightError as e:
+                print(f"  could not open it: {e}")
+        if details_url is None:
+            page, details_url = wait_for_user_on_quiz_page(ctx)
+        url_file.write_text(details_url, encoding="utf-8")
         print(f"Using quiz page: {details_url}\n")
 
         dry = 0
         for attempt in range(1, args.max_attempts + 1):
+            page = current_page(ctx, page)
             try:
                 shown, new = run_attempt(page, details_url, store, attempt, args)
             except (RuntimeError, PlaywrightTimeout, PlaywrightError) as e:
-                print(f"Attempt {attempt}: error - {e}")
-                page.screenshot(path=str(store.dir / f"error_attempt_{attempt}.png"))
-                (store.dir / f"error_attempt_{attempt}.html").write_text(page.content(), encoding="utf-8")
-                print("  Saved a screenshot + HTML of the page to the output folder. Retrying from the quiz page.")
-                page.goto(details_url, wait_until="domcontentloaded")
-                time.sleep(args.settle)
+                print(f"Attempt {attempt}: error - {str(e).splitlines()[0]}")
+                page = current_page(ctx, page)
+                try:
+                    page.screenshot(path=str(store.dir / f"error_attempt_{attempt}.png"))
+                    (store.dir / f"error_attempt_{attempt}.html").write_text(page.content(), encoding="utf-8")
+                    print("  Saved a screenshot + HTML of the page to the output folder.")
+                except PlaywrightError:
+                    pass
+                page = back_to_quiz(ctx, page, details_url)
+                if page is None:
+                    page, details_url = wait_for_user_on_quiz_page(ctx)
+                    url_file.write_text(details_url, encoding="utf-8")
                 continue
             store.save()
             dry = 0 if new else dry + 1

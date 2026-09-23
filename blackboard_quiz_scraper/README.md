@@ -41,6 +41,8 @@ Useful options:
 
 Your login is kept in `.bb_browser_profile/`, so you normally only log in once.
 
+The quiz page address is saved in `quiz_output/quiz_url.txt`. On later runs the script opens it by itself, so you don't have to navigate there again. If it ever can't get back to the quiz, it pauses and asks you to open the page and press Enter.
+
 ## If something goes wrong
 
 When a step fails, the script saves `error_attempt_N.png` and `error_attempt_N.html` to the output folder. It then goes back to the quiz page and tries again. The HTML file shows which button or element it could not find.

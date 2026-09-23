@@ -141,15 +141,21 @@ def clean_text(text):
     return "\n".join(lines)
 
 
-def question_key(text, images):
+NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?")
+
+
+def question_key(text, images, ignore_numbers=True):
     norm = re.sub(r"\s+", " ", text).strip().lower()
+    if ignore_numbers:
+        # questions whose numbers are randomised each attempt count as the same question
+        norm = NUMBER.sub("#", norm)
     return hashlib.sha1((norm + "|" + "|".join(sorted(images))).encode("utf-8")).hexdigest()
 
 
 class Store:
     """Keeps seen questions on disk (JSON + screenshots) and rebuilds the .docx."""
 
-    def __init__(self, out_dir, title):
+    def __init__(self, out_dir, title, ignore_numbers=True):
         self.dir = Path(out_dir)
         self.img_dir = self.dir / "screenshots"
         self.img_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +165,16 @@ class Store:
         self.questions = []
         if self.json_path.exists():
             self.questions = json.loads(self.json_path.read_text(encoding="utf-8"))
-        self.keys = {q["key"] for q in self.questions}
+        self.ignore_numbers = ignore_numbers
+        # recompute keys so saved progress follows the current duplicate rule
+        self.keys = set()
+        unique = []
+        for q in self.questions:
+            q["key"] = question_key(q["text"], q["images"], ignore_numbers)
+            if q["key"] not in self.keys:
+                self.keys.add(q["key"])
+                unique.append(q)
+        self.questions = unique
 
     def has(self, key):
         return key in self.keys
@@ -284,7 +299,7 @@ def run_attempt(page, details_url, store, attempt_no, args):
         text = clean_text(b["text"])
         if len(text) < 5 and not b["images"]:
             continue
-        key = question_key(text, b["images"])
+        key = question_key(text, b["images"], store.ignore_numbers)
         if store.has(key):
             continue
         shot = None
@@ -334,6 +349,8 @@ def main():
     ap.add_argument("--stop-after", type=int, default=15,
                     help="Stop after this many attempts in a row with no new questions (default 15)")
     ap.add_argument("--settle", type=float, default=2.0, help="Seconds to wait for pages to settle (default 2)")
+    ap.add_argument("--keep-number-variants", action="store_true",
+                    help="Save a question again when only its numbers differ (default: ignore number changes)")
     ap.add_argument("--no-screenshots", action="store_true", help="Text only, no question screenshots")
     ap.add_argument("--browser", default=None, choices=["msedge", "chrome"],
                     help="Use an installed Edge/Chrome instead of Playwright's Chromium")
@@ -342,7 +359,7 @@ def main():
                     help="Browser profile folder, so your login is remembered between runs")
     args = ap.parse_args()
 
-    store = Store(args.out, args.title)
+    store = Store(args.out, args.title, ignore_numbers=not args.keep_number_variants)
     print(f"Loaded {len(store.questions)} previously saved questions from {store.dir}")
 
     with sync_playwright() as pw:

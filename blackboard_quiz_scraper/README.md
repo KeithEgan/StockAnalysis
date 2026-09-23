@@ -35,6 +35,7 @@ Useful options:
 | `--stop-after N` | Stop after N attempts in a row with nothing new (default 15) |
 | `--settle SECONDS` | Extra wait after page loads; increase it if Blackboard is slow (default 2) |
 | `--browser msedge` | Use your installed Microsoft Edge instead of Playwright's Chromium |
+| `--keep-number-variants` | Save a question again when only its numbers differ |
 | `--no-screenshots` | Text only |
 | `--out DIR` | Output folder (default `quiz_output`) |
 
@@ -46,5 +47,5 @@ When a step fails, the script saves `error_attempt_N.png` and `error_attempt_N.h
 
 ## Notes
 
-- Two questions count as duplicates only when their text and images match. If the bank uses calculated questions with random numbers, each number variation is saved as a separate question.
+- The numbers in a question are ignored when checking for duplicates. A question whose values are randomised each attempt (e.g. "stiffness is 1.2kN/m" in one attempt and "3.4kN/m" in the next) is saved once, with the numbers from the first time it was seen. To save every number variation, use `--keep-number-variants`.
 - Each run submits real attempts, and they appear in your attempt history. Only use the script on quizzes that allow unlimited, ungraded attempts, like formative self-tests. Check that your institution allows this kind of automation.

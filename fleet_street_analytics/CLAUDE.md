@@ -3,7 +3,7 @@
 Guidance for Claude Code when working in `fleet_street_analytics/`. Read `docs/PRD.md` first. It is the source of truth for scope.
 
 ## What this is
-A multi-party political analytics platform for Ireland. It predicts party vote share per street segment (groups of 10 or more households) from generalised public data plus party canvass data, and shows the results on a map to guide canvassing.
+A multi-party political analytics platform for Ireland. It predicts party vote share per street segment from generalised public data plus party canvass data, and shows the results on a map to guide canvassing.
 
 ## The three-tier data model (hard invariants)
 
@@ -22,7 +22,7 @@ Never write code that:
 - writes Party or TD data (raw or aggregated) into Master;
 - lets one party read another party's data, or lets a Party read raw TD records;
 - stores personal data (name, exact house number, per-household leaning, individual vehicle records) in Master;
-- outputs or displays any group with fewer than `K_MIN` households (default 10, floor 5) outside a TD's own view;
+- outputs or displays any group smaller than `MIN_GROUP_SIZE` outside a TD's own view, when that setting is configured. It is **unset by default**. Do not hard-code a value;
 - does a cross-tier write that bypasses the generalisation pipeline;
 - puts data from two parties into one analytics job.
 
@@ -30,8 +30,9 @@ If a task seems to need one of these, stop and ask. Do not work around it.
 
 ## Generalisation pipeline
 - It is the only path for cross-tier writes. It is pure, deterministic and unit-tested.
-- Steps: strip direct identifiers → map to spatial key (street segment ID / CSO Small Area ID) → coarsen quasi-identifiers (age bands, month-level dates) → aggregate → enforce `K_MIN` (merge with neighbours or suppress) → write an audit record.
-- Any change to it needs tests that show `K_MIN` is still enforced and no identifiers leak.
+- **Public → Master:** strip direct identifiers → map to spatial key (street segment ID / CSO Small Area ID) → coarsen quasi-identifiers → aggregate → write an audit record. The Master DB never holds personal data.
+- **TD → Party:** a **rule-driven** framework (per-field delete / generalise / pass-through, set in config). The rules are **not yet defined**. Do not invent them. Build the mechanism, and ship with an empty or placeholder rule set until the product owner specifies one.
+- `MIN_GROUP_SIZE` is an optional setting. When set, merge or suppress smaller groups. When unset, skip that step.
 
 ## Proposed stack (not yet built; confirm before deviating)
 - **DB:** PostgreSQL + PostGIS. Separate databases per tier. Per-party and per-TD isolation through separate schemas/DBs plus row-level security. Per-tenant encryption keys.
@@ -54,13 +55,13 @@ fleet_street_analytics/
 ## Conventions
 - Every ingestion connector declares: source URL, licence/ToS note, refresh schedule, and retention for raw data (default ≤7 days in quarantine).
 - Every TD/Party data access goes through the audit log helper. No direct queries that skip it.
-- The TD schema is fixed and explicit. Do not add free-form "any data" fields. New fields need a PRD update and a note on the DPIA impact.
-- Data-subject rights (access, erasure, objection) must work end to end. Erasing a TD record triggers regeneration of the affected Party aggregates.
+- The TD DB has core fields plus TD-defined custom fields. Do not add generalisation or minimisation constraints at the TD tier.
+- Keep lightweight record tools in the TD DB: a consent flag with its date, and export/erase. Erasing a TD record triggers regeneration of the affected Party aggregates.
 - Tests use synthetic data only. Never commit real personal data, scraped dumps, or credentials.
 - Use Irish terms consistently: TD, Eircode, CSO Small Area, constituency, tally.
 
 ## Compliance context (for design decisions, not legal advice)
-- Political opinions are GDPR Art. 9 special-category data. Parties/TDs process them under the Irish DPA 2018 electoral provisions. FSA is a **processor** for Party/TD data and a **controller** only for Master.
+- Political opinions are GDPR Art. 9 special-category data. The TD DB is not constrained by generalisation rules, but GDPR still applies to it, with the TD as controller and consent / DPA 2018 electoral provisions as the basis. The platform only needs to support consent recording and export/erase there. FSA is a **processor** for Party/TD data and a **controller** only for Master.
 - Individual vehicle registration data and full Eircode (ECAD) data are not free public data. Use licensed or aggregate sources only.
 - Open legal questions are listed in PRD §10. Do not settle them in code by assumption.
 
